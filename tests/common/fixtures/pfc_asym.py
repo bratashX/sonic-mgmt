@@ -1,6 +1,7 @@
 import pytest
 import os
 import time
+from natsort import natsorted
 
 from netaddr import IPAddress
 from tests.common.helpers.generators import generate_ips
@@ -8,7 +9,7 @@ from tests.common.helpers.generators import generate_ips
 
 PFC_GEN_FILE = "pfc_gen.py"
 PFC_FRAMES_NUMBER = 50000000
-PFC_QUEUE_INDEX = 0xff
+PFC_QUEUE_INDEX = 0x7f
 
 ANSIBLE_ROOT = os.path.normpath((os.path.join(__file__, "../../../ansible")))
 RUN_PLAYBOOK = os.path.realpath(os.path.join(os.path.dirname(__file__), "../../scripts/exec_template.yml"))
@@ -23,10 +24,9 @@ ARP_RESPONDER_CONF = os.path.join(TESTS_ROOT, "templates/arp_responder.conf.j2")
 
 def get_fanout(fanout_graph_facts, setup):
     for fanout_host_name, value in fanout_graph_facts.items():
-        for _, ports in value["device_conn"].items():
-            for fanout_inf, peer_info in ports.items():
-                if peer_info["peerport"] == setup["ptf_test_params"]["server_ports"][0]["dut_name"]:
-                    return fanout_host_name
+        for fanout_inf, peer_info in value["device_conn"].items():
+            if peer_info["peerport"] == setup["ptf_test_params"]["server_ports"][0]["dut_name"]:
+                return fanout_host_name
     return None
 
 
@@ -43,6 +43,36 @@ def minigraph_facts(duthosts, rand_one_dut_hostname, tbinfo):
     duthost = duthosts[rand_one_dut_hostname]
     yield duthost.get_extended_minigraph_facts(tbinfo)
 
+
+@pytest.fixture(scope="module")
+def ptf_portmap_file(duthosts, rand_one_dut_hostname, ptfhost):
+    """
+        Prepare and copys port map file to PTF host
+
+        Args:
+            request (Fixture): pytest request object
+            duthost (AnsibleHost): Device Under Test (DUT)
+            ptfhost (AnsibleHost): Packet Test Framework (PTF)
+
+        Returns:
+            filename (str): returns the filename copied to PTF host
+    """
+    duthost = duthosts[rand_one_dut_hostname]
+    intfInfo = duthost.show_interface(command = "status")['ansible_facts']['int_status']
+    portList = natsorted([port for port in intfInfo if port.startswith('Ethernet')])
+    portMapFile = "/tmp/default_interface_to_front_map.ini"
+    with open(portMapFile, 'w') as file:
+        file.write("# ptf host interface @ switch front port name\n")
+        file.writelines(
+            map(
+                    lambda (index, port): "{0}@{1}\n".format(index, port),
+                    enumerate(portList)
+                )
+            )
+
+    ptfhost.copy(src=portMapFile, dest="/root/")
+
+    yield "/root/{}".format(portMapFile.split('/')[-1])
 
 @pytest.fixture(autouse=True, scope="module")
 def deploy_pfc_gen(fanouthosts, fanout_graph_facts, setup):
@@ -112,15 +142,13 @@ def pfc_storm_runner(fanouthosts, fanout_graph_facts, pfc_storm_template, setup)
             dev_conn = fanout_graph_facts[fanout_host_name]["device_conn"]
             plist = []
             if self.server_ports:
-                for _, val in dev_conn.items():
-                    p = ",".join([key for key, value in val.items() if value["peerport"] in self.used_server_ports])
-                    if p:
-                        plist.append(p)
+                p = ",".join([key for key, value in dev_conn.items() if value["peerport"] in self.used_server_ports])
+                if p:
+                    plist.append(p)
             if self.non_server_port:
-                for _, val in dev_conn.items():
-                    p = ",".join([key for key, value in val.items() if value["peerport"] in self.used_non_server_port])
-                    if p:
-                        plist.append(p)
+                p = ",".join([key for key, value in dev_conn.items() if value["peerport"] in self.used_non_server_port])
+                if p:
+                    plist.append(p)
             params["pfc_fanout_interface"] += ",".join([key for key in plist])
             fanout_host.exec_template(ansible_root=ANSIBLE_ROOT, ansible_playbook=RUN_PLAYBOOK, inventory=setup["fanout_inventory"], \
                 **params)
@@ -178,7 +206,7 @@ def enable_pfc_asym(setup, duthosts, rand_one_dut_hostname):
             assert setup["pfc_bitmask"]["pfc_mask"] == int(duthost.command(get_asym_pfc.format(port=p_oid, sai_attr=sai_default_asym_pfc))["stdout"])
 
 @pytest.fixture(scope="module")
-def setup(tbinfo, duthosts, rand_one_dut_hostname, ptfhost, ansible_facts, minigraph_facts, request):
+def setup(tbinfo, duthosts, rand_one_dut_hostname, ptfhost, ansible_facts, minigraph_facts, request, ptf_portmap_file):
     """
     Fixture performs initial steps which is required for test case execution.
     Also it compose data which is used as input parameters for PTF test cases, and PFC - RX and TX masks which is used in test case logic.
@@ -225,14 +253,15 @@ def setup(tbinfo, duthosts, rand_one_dut_hostname, ptfhost, ansible_facts, minig
             "pfc_tx_mask": 0
             },
         "ptf_test_params": {
-            "port_map_file": None,
+            "port_map_file": ptf_portmap_file,
             "server": None,
             "server_ports": [],
             "non_server_port": None,
             "router_mac": None,
             "pfc_to_dscp": None,
             "lossless_priorities": None,
-            "lossy_priorities": None
+            "lossy_priorities": None,
+            "asic_type": duthost.facts["asic_type"]
             },
         "server_ports_oids": [],
         "fanout_inventory": request.config.getoption("--fanout_inventory")
@@ -271,7 +300,7 @@ class Setup(object):
         self.generate_non_server_ports()
         self.generate_router_mac()
         self.prepare_arp_responder()
-        self.prepare_ptf_port_map()
+        #self.prepare_ptf_port_map()
         self.generate_priority()
         self.generate_pfc_to_dscp_map()
         self.generate_pfc_bitmask()
@@ -298,7 +327,7 @@ class Setup(object):
             port_info["oid"] = sai_redis_oid
             self.vars["ptf_test_params"]["server_ports"].append(port_info)
 
-        self.vars["ptf_test_params"]["server"] = self.ansible_facts["ansible_hostname"]
+        self.vars["ptf_test_params"]["server"] = "10.211.110.33" #self.ansible_facts["ansible_default_ipv4"]["address"]
 
     def generate_non_server_ports(self):
         """ Generate list of port parameters which are connected to VMs """

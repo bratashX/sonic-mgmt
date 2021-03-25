@@ -31,6 +31,13 @@ def test_pfc_asym_off_rx_pause_frames(ptfhost, setup, pfc_storm_runner):
     @param setup: Fixture which performs setup/tardown steps needed for test case preparation
     @param pfc_storm_runner: Fixture which start/stop PFC generator on Fanout switch
     """
+
+    # Due to limitation on Tofino 1 we do not differentiate the RX PFC with the priority it holds but stop
+    # the whole traffic. That's why this test case is skipped for BFN platfrom. But it should be working
+    # on Tofino2 with some driver code modification.
+    if setup["ptf_test_params"]["asic_type"] == "barefoot":
+        pytest.skip("Not supported for {} asic".format(setup["ptf_test_params"]["asic_type"]))
+
     pfc_storm_runner.server_ports = True
     pfc_storm_runner.run()
 
