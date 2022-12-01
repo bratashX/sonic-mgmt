@@ -230,7 +230,7 @@ def analyze_log_file(duthost, messages, result, offset_from_kexec):
                 timestamp = _parse_timestamp(re.split(delim, message)[0].strip())
                 state_name = state.split("|")[0].strip()
                 if state_name + "|End" not in derived_patterns.keys():
-                    if "FDB_EVENT_SCAPY_MAC_EXPIRY" in state_name:
+                    if "FDB_EVENT_OTHER_MAC_EXPIRY" in state_name or "FDB_EVENT_SCAPY_MAC_EXPIRY" in state_name:
                         fdb_aging_disable_start = service_restart_times.get("FDB_AGING_DISABLE", {})\
                             .get("timestamp", {}).get("Start")
                         if not fdb_aging_disable_start:
@@ -280,7 +280,7 @@ def analyze_sairedis_rec(messages, result, offset_from_kexec):
                 state_name = state.split("|")[0].strip()
                 reboot_time = result.get("reboot_time", {}).get("timestamp", {}).get("Start")
                 if state_name + "|End" not in SAIREDIS_PATTERNS.keys():
-                    if "FDB_EVENT_SCAPY_MAC_EXPIRY" in state_name:
+                    if "FDB_EVENT_OTHER_MAC_EXPIRY" in state_name or "FDB_EVENT_SCAPY_MAC_EXPIRY" in state_name:
                         fdb_aging_disable_start = result.get("time_span", {}).get("FDB_AGING_DISABLE", {})\
                             .get("timestamp", {}).get("Start")
                         if not fdb_aging_disable_start:
@@ -349,7 +349,7 @@ def verify_mac_jumping(test_name, timing_data, verification_errors):
         # and ends when SAI is instructed to enable MAC learning (warmboot recovery path)
         logging.info("Mac expiry for unexpected addresses started at {}".format(mac_expiry_start) +\
             " and FDB learning enabled at {}".format(fdb_aging_disable_end))
-        if _parse_timestamp(mac_expiry_start) > _parse_timestamp(fdb_aging_disable_start) and\
+        if mac_expiry_start and _parse_timestamp(mac_expiry_start) > _parse_timestamp(fdb_aging_disable_start) and\
             _parse_timestamp(mac_expiry_start) < _parse_timestamp(fdb_aging_disable_end):
             verification_errors.append("Mac expiry detected during the window when FDB ageing was disabled")
 
